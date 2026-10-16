@@ -192,9 +192,10 @@ export default function MatrixApp({ initial, session: initialSession, dbError })
     const j = await api('POST', '/api/admin', { code });
     setSession({ name: j.name, role: 'admin' });
     toast('Mode admin activé');
+    refresh();
   }
   async function disableAdmin() {
-    try { const j = await api('DELETE', '/api/admin'); setSession({ name: j.name, role: 'member' }); toast('Mode admin désactivé'); }
+    try { const j = await api('DELETE', '/api/admin'); setSession({ name: j.name, role: 'member' }); setActivity([]); toast('Mode admin désactivé'); refresh(); }
     catch (e) { if (e.status === 401) onAuthLost(); else toast(e.message); }
   }
   async function logout() {
@@ -442,7 +443,7 @@ function Drawer({ action, preset, isNew, isAdmin, W, defaultWs, onClose, onSave,
             <textarea className="inp" id="f-note" rows={3} placeholder="Contexte, contact, prochaine étape" value={form.note} onChange={(e) => set('note', e.target.value)} />
           </div>
           {locked && <p className="hint">Seul un admin peut modifier l’intitulé, le chantier, la priorité, le porteur et l’échéance.</p>}
-          {action?.updated_by && <p className="dr-meta">Dernière mise à jour par {action.updated_by} · {fmtRel(action.updated_at)}</p>}
+          {isAdmin && action?.updated_by && <p className="dr-meta">Dernière mise à jour par {action.updated_by} · {fmtRel(action.updated_at)}</p>}
         </div>
         <div className="dr-foot">
           {isAdmin && !isNew && (

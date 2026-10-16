@@ -43,19 +43,6 @@ export function Vue360({ actions, activity, W, isAdmin, onEditRun, onJump, onOpe
   const blockedList = all.filter((a) => a.status === 'blocked').sort(byDue);
   const lateList = late.filter((a) => a.status !== 'blocked').sort(byDue);
 
-  const owners = useMemo(() => {
-    const m = new Map();
-    all.forEach((a) => {
-      const k = a.owner || '';
-      if (!m.has(k)) m.set(k, { open: 0, blocked: 0, late: 0 });
-      const o = m.get(k);
-      if (a.status !== 'done') o.open++;
-      if (a.status === 'blocked') o.blocked++;
-      if (isLate(a)) o.late++;
-    });
-    return [...m.entries()].sort((a, b) => b[1].open - a[1].open || a[0].localeCompare(b[0], 'fr'));
-  }, [all]);
-
   const Li = ({ a, c }) => (
     <button type="button" className="li" onClick={() => onOpen(a.id)}>
       <Dot c={c} />
@@ -194,23 +181,6 @@ export function Vue360({ actions, activity, W, isAdmin, onEditRun, onJump, onOpe
         </section>
 
         <section className="panel">
-          <h2 className="sec-h">Charge par porteur</h2>
-          <table className="tbl">
-            <thead><tr><th scope="col">Porteur</th><th scope="col">Ouvertes</th><th scope="col">Bloquées</th><th scope="col">Retard</th></tr></thead>
-            <tbody>
-              {owners.map(([k, o]) => (
-                <tr key={k || '_'}>
-                  <td>{k ? <button type="button" onClick={() => onJump({ owner: k })}>{k}</button> : 'À désigner'}</td>
-                  <td>{o.open}</td>
-                  <td className={o.blocked ? 'hot' : ''}>{o.blocked}</td>
-                  <td className={o.late ? 'hot' : ''}>{o.late}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
-
-        <section className="panel">
           <h2 className="sec-h">Jalons</h2>
           <div className="ms">
             {MILESTONES.map(([d, l, key]) => {
@@ -224,7 +194,7 @@ export function Vue360({ actions, activity, W, isAdmin, onEditRun, onJump, onOpe
           </div>
         </section>
 
-        <section className="panel">
+        {isAdmin && <section className="panel">
           <h2 className="sec-h">Activité récente</h2>
           {activity.length ? (
             <div className="list">
@@ -245,7 +215,7 @@ export function Vue360({ actions, activity, W, isAdmin, onEditRun, onJump, onOpe
               })}
             </div>
           ) : <p className="none">Les mises à jour de l’équipe s’afficheront ici.</p>}
-        </section>
+        </section>}
       </div>
     </div>
   );

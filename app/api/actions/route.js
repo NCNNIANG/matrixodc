@@ -1,4 +1,4 @@
-import { listAll, insertAction, logActivity, listSegments } from '@/lib/store';
+import { listAll, insertAction, logActivity, listSegments, scopeForRole } from '@/lib/store';
 import { buildWS } from '@/lib/constants';
 import { cleanPatch, applyBlockRule, ADMIN_FIELDS, InputError } from '@/lib/validate';
 import { json, fail, readBody, requireSession } from '@/lib/http';
@@ -9,7 +9,7 @@ export async function GET(req) {
   const { session, error } = requireSession(req);
   if (error) return error;
   try {
-    const data = await listAll();
+    const data = scopeForRole(await listAll(), session.role);
     return json({ ...data, session });
   } catch (e) {
     return fail(e);

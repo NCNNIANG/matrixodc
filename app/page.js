@@ -1,6 +1,6 @@
 import { cookies } from 'next/headers';
 import { COOKIE, readToken, configProblem } from '@/lib/session';
-import { listAll } from '@/lib/store';
+import { listAll, scopeForRole } from '@/lib/store';
 import Lock from '@/components/Lock';
 import MatrixApp from '@/components/MatrixApp';
 
@@ -23,7 +23,7 @@ export default async function Page() {
   let initial = { actions: [], activity: [] };
   let dbError = false;
   try {
-    initial = await listAll();
+    initial = scopeForRole(await listAll(), session.role);
   } catch (e) {
     console.error(e);
     dbError = true;
