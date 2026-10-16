@@ -1,4 +1,5 @@
-import { getAction, updateAction, deleteAction, logActivity } from '@/lib/store';
+import { getAction, updateAction, deleteAction, logActivity, listSegments } from '@/lib/store';
+import { buildWS } from '@/lib/constants';
 import { cleanPatch, applyBlockRule, describeChange, MEMBER_FIELDS, ADMIN_FIELDS } from '@/lib/validate';
 import { json, fail, readBody, requireSession } from '@/lib/http';
 
@@ -15,11 +16,12 @@ export async function PATCH(req, { params }) {
     const body = await readBody(req);
     const refused = Object.keys(body).filter((k) => ADMIN_FIELDS.includes(k) && !allowed.includes(k));
     if (refused.length) return json({ error: 'Seul un admin peut modifier l’intitulé, le chantier, la priorité, le porteur et l’échéance.' }, 403);
-    const patch = applyBlockRule(cleanPatch(body, allowed), before);
+    const W = buildWS((await listSegments()).segments);
+    const patch = applyBlockRule(cleanPatch(body, allowed, W.map), before);
     if (!Object.keys(patch).length) return json({ action: before });
     patch.updated_by = session.name;
     const after = await updateAction(params.id, patch);
-    await logActivity({ action_id: before.id, action_title: (after || before).title, who: session.name, what: describeChange(before, patch) });
+    await logActivity({ action_id: before.id, action_title: (after || before).title, who: session.name, what: describeChange(before, patch, W.map) });
     return json({ action: after });
   } catch (e) {
     return fail(e);

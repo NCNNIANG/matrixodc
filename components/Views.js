@@ -1,6 +1,6 @@
 'use client';
 import { useMemo, useRef, useState } from 'react';
-import { WS, ST, STMAP, WSMAP, PRIOMAP, RUN, MILESTONES, ROLE_LABELS } from '@/lib/constants';
+import { ST, STMAP, PRIOMAP, MILESTONES, ROLE_LABELS, fmtTime, endOf, toMin } from '@/lib/constants';
 import { todayISO, addDays, fmtDate, fmtRel, isLate, isSoon, byDue, plural, trunc, needsName } from '@/lib/format';
 
 /* ---------- Petits éléments ---------- */
@@ -14,7 +14,7 @@ const ownerTxt = (a) => a.owner || 'À désigner';
 const Dot = ({ c }) => <span className="dot" style={{ '--c': `var(--${c})` }} />;
 
 /* ---------- Vue 360 ---------- */
-export function Vue360({ actions, activity, onJump, onOpen }) {
+export function Vue360({ actions, activity, W, isAdmin, onEditRun, onJump, onOpen }) {
   const all = actions;
   const total = all.length;
   const count = (k) => all.filter((a) => a.status === k).length;
@@ -25,7 +25,7 @@ export function Vue360({ actions, activity, onJump, onOpen }) {
   const t = todayISO();
 
   const matrix = useMemo(() => {
-    const rows = WS.map((w) => {
+    const rows = W.list.map((w) => {
       const xs = all.filter((a) => a.ws === w.k);
       const c = {};
       ST.forEach((s) => { c[s.k] = xs.filter((a) => a.status === s.k).length; });
@@ -33,7 +33,12 @@ export function Vue360({ actions, activity, onJump, onOpen }) {
     }).filter((r) => r.xs.length);
     const max = Math.max(1, ...rows.flatMap((r) => ST.map((s) => r.c[s.k])));
     return { rows, max };
-  }, [all]);
+  }, [all, W]);
+
+  const segs = W.segments;
+  const runStart = segs[0]?.start;
+  const runEnd = segs.length ? segs.map(endOf).reduce((a, b) => (toMin(b) > toMin(a) ? b : a)) : null;
+  const runMin = runStart && runEnd ? toMin(runEnd) - toMin(runStart) : 0;
 
   const blockedList = all.filter((a) => a.status === 'blocked').sort(byDue);
   const lateList = late.filter((a) => a.status !== 'blocked').sort(byDue);
@@ -56,7 +61,7 @@ export function Vue360({ actions, activity, onJump, onOpen }) {
       <Dot c={c} />
       <span>
         <span className="li-t">{a.title}</span>
-        <span className="li-s">{WSMAP[a.ws]?.l} · {ownerTxt(a)} · <Due a={a} /></span>
+        <span className="li-s">{W.map[a.ws]?.l} · {ownerTxt(a)} · <Due a={a} /></span>
         {a.status === 'blocked' && a.blocker && <span className="li-b">Bloqué : {a.blocker}</span>}
       </span>
     </button>
@@ -94,24 +99,27 @@ export function Vue360({ actions, activity, onJump, onOpen }) {
       </div>
 
       <section>
-        <h2 className="sec-h">Déroulé du 30 octobre <span>17h00 → 18h15 · 75 minutes sans marge · avancement par séquence</span></h2>
+        <div className="run-head">
+          <h2 className="sec-h">Déroulé du 30 octobre {runStart && <span>{fmtTime(runStart)} → {fmtTime(runEnd)} · {runMin} minutes · avancement par moment</span>}</h2>
+          {isAdmin && <button type="button" className="btn btn-ghost run-edit" onClick={onEditRun}>Modifier le déroulé</button>}
+        </div>
         <div className="run">
-          {RUN.map((r) => {
-            const xs = all.filter((a) => a.ws === r.ws);
+          {segs.map((sg) => {
+            const xs = all.filter((a) => a.ws === sg.id);
             const d = xs.filter((a) => a.status === 'done').length;
             const b = xs.filter((a) => a.status === 'blocked').length;
             const p = xs.length ? Math.round((d / xs.length) * 100) : 0;
             return (
-              <button type="button" key={r.ws} className="run-seg" style={{ '--m': r.m }} onClick={() => onJump({ ws: r.ws })}>
-                <span className="run-t">{r.t}</span>
-                <span className="run-l">{r.l}</span>
+              <button type="button" key={sg.id} className="run-seg" style={{ '--m': sg.duration }} onClick={() => onJump({ ws: sg.id })}>
+                <span className="run-t">{fmtTime(sg.start)} <small>{sg.duration} min</small></span>
+                <span className="run-l">{sg.title}</span>
                 <span className="bar"><i style={{ width: p + '%' }} /></span>
                 <span className="run-n">{d}/{xs.length}{b ? <> · <em>{plural(b, 'bloquée', 'bloquées')}</em></> : null}</span>
               </button>
             );
           })}
         </div>
-        <div className="run-axis" aria-hidden="true"><span>17h00</span><span>17h15</span><span>17h30</span><span>17h45</span><span>18h00</span><span>18h15</span></div>
+        {runStart && <div className="run-axis" aria-hidden="true"><span>{fmtTime(runStart)}</span><span>{fmtTime(runEnd)}</span></div>}
       </section>
 
       <div className="grid-2">
@@ -210,7 +218,7 @@ export function Vue360({ actions, activity, onJump, onOpen }) {
               return [
                 <span key={d + 'd'} className="d">{fmtDate(d)}</span>,
                 <span key={d + 'm'} className={`m ${st}`} />,
-                <span key={d + 't'} className={`t ${st}${key ? ' key' : ''}`}>{l}</span>
+                <span key={d + 't'} className={`t ${st}${key ? ' key' : ''}`}>{key && runStart ? `${l} ${fmtTime(runStart)}` : l}</span>
               ];
             })}
           </div>
@@ -244,7 +252,7 @@ export function Vue360({ actions, activity, onJump, onOpen }) {
 }
 
 /* ---------- Kanban ---------- */
-export function Kanban({ items, canDrag, onOpen, onStatus }) {
+export function Kanban({ items, W, canDrag, onOpen, onStatus }) {
   const dragId = useRef(null);
   const [over, setOver] = useState('');
   const [dragging, setDragging] = useState('');
@@ -274,7 +282,7 @@ export function Kanban({ items, canDrag, onOpen, onStatus }) {
                     onClick={(e) => { if (e.target.closest('select')) return; onOpen(a.id); }}
                     onKeyDown={(e) => { if (e.key === 'Enter' && e.target === e.currentTarget) { e.preventDefault(); onOpen(a.id); } }}
                   >
-                    <div className="card-top"><span className="tag">{WSMAP[a.ws]?.l}</span><Prio p={a.prio} /></div>
+                    <div className="card-top"><span className="tag">{W.map[a.ws]?.l}</span><Prio p={a.prio} /></div>
                     <p className="card-t">{a.title}</p>
                     {a.status === 'blocked' && a.blocker && <p className="card-b">Bloqué : {a.blocker}</p>}
                     <div className="card-m"><span className="owner">{ownerTxt(a)}</span><Due a={a} /></div>
@@ -294,8 +302,8 @@ export function Kanban({ items, canDrag, onOpen, onStatus }) {
 }
 
 /* ---------- Checklist ---------- */
-export function Checklist({ items, all, collapsed, onToggleGroup, onOpen, onStatus, onReset }) {
-  const groups = WS.map((w) => {
+export function Checklist({ items, all, W, collapsed, onToggleGroup, onOpen, onStatus, onReset }) {
+  const groups = W.list.map((w) => {
     const list = items.filter((a) => a.ws === w.k).sort(byDue);
     if (!list.length) return null;
     const allW = all.filter((a) => a.ws === w.k);
@@ -346,7 +354,7 @@ export function Checklist({ items, all, collapsed, onToggleGroup, onOpen, onStat
 
 /* ---------- Affectation (admin) ---------- */
 const ROLES = new Set(ROLE_LABELS);
-export function Affectation({ all, items, onOwner, onDue, onReplace, onOpen }) {
+export function Affectation({ all, items, W, onOwner, onDue, onReplace, onOpen }) {
   const [drafts, setDrafts] = useState({});
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
@@ -376,7 +384,7 @@ export function Affectation({ all, items, onOwner, onDue, onReplace, onOpen }) {
     if (v.trim() !== a.owner) onOwner(a.id, v.trim());
   }
 
-  const groups = WS.map((w) => {
+  const groups = W.list.map((w) => {
     const list = items.filter((a) => a.ws === w.k).sort(byDue);
     if (!list.length) return null;
     return (

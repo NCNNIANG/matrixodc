@@ -39,3 +39,15 @@ alter table public.actions  enable row level security;
 alter table public.activity enable row level security;
 revoke all on public.actions  from anon, authenticated;
 revoke all on public.activity from anon, authenticated;
+
+-- Déroulé du 30 octobre (moments modifiables en mode admin)
+create table if not exists public.segments (
+  id            text primary key,
+  start_time    text not null check (start_time ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'),
+  duration_min  integer not null check (duration_min between 1 and 600),
+  title         text not null,
+  updated_at    timestamptz not null default now()
+);
+
+alter table public.segments enable row level security;
+revoke all on public.segments from anon, authenticated;

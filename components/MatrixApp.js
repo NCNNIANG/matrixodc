@@ -1,6 +1,6 @@
 'use client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { WS, ST, PRIO, STMAP, WSMAP, EVENT_DAY } from '@/lib/constants';
+import { ST, PRIO, STMAP, EVENT_DAY, buildWS, fmtTime, endOf, toMin, fromMin, isTime } from '@/lib/constants';
 import { todayISO, dayDiff, fmtRel, isLate, isSoon, trunc, plural } from '@/lib/format';
 import { Vue360, Kanban, Checklist, Affectation } from './Views';
 import Squares from './Squares';
@@ -42,6 +42,8 @@ async function api(method, url, body) {
 export default function MatrixApp({ initial, session: initialSession, dbError }) {
   const [actions, setActions] = useState(() => (initial.actions || []).map(norm));
   const [activity, setActivity] = useState(initial.activity || []);
+  const [segments, setSegments] = useState(initial.segments || []);
+  const [runOpen, setRunOpen] = useState(false);
   const [session, setSession] = useState(initialSession);
   const [sync, setSync] = useState(dbError ? 'offline' : 'live');
   const [view, setViewState] = useState('v360');
@@ -57,6 +59,9 @@ export default function MatrixApp({ initial, session: initialSession, dbError })
 
   const isAdmin = session.role === 'admin';
   const effView = view === 'assign' && !isAdmin ? 'v360' : view;
+  const W = useMemo(() => buildWS(segments), [segments]);
+  // Une action rattachée à un moment disparu du déroulé s'affiche sous « Pilotage ».
+  const shownActions = useMemo(() => actions.map((a) => (W.map[a.ws] ? a : { ...a, ws: 'pil' })), [actions, W]);
 
   /* Préférences locales (vue, filtres, groupes repliés) */
   useEffect(() => {
@@ -82,6 +87,7 @@ export default function MatrixApp({ initial, session: initialSession, dbError })
       if (pending.current > 0) return;
       setActions((j.actions || []).map(norm));
       setActivity(j.activity || []);
+      if (j.segments) setSegments(j.segments);
       if (j.session) setSession((s) => (s.role !== j.session.role || s.name !== j.session.name ? j.session : s));
       setSync('live');
     } catch (e) {
@@ -169,6 +175,19 @@ export default function MatrixApp({ initial, session: initialSession, dbError })
     } finally { pending.current--; refresh(); }
   }
 
+  async function saveRun(list) {
+    pending.current++;
+    try {
+      const j = await api('PUT', '/api/segments', { segments: list });
+      setSegments(j.segments);
+      toast('Déroulé enregistré');
+      return true;
+    } catch (e) {
+      if (e.status === 401) { onAuthLost(); return false; }
+      throw e;
+    } finally { pending.current--; refresh(); }
+  }
+
   async function enableAdmin(code) {
     const j = await api('POST', '/api/admin', { code });
     setSession({ name: j.name, role: 'admin' });
@@ -196,26 +215,27 @@ export default function MatrixApp({ initial, session: initialSession, dbError })
   const owners = useMemo(() => [...new Set(actions.map((a) => a.owner).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'fr')), [actions]);
   const filtered = useCallback((ignoreStatus) => {
     const q = f.q.trim().toLowerCase();
-    return actions.filter((a) =>
+    return shownActions.filter((a) =>
       (!f.ws || a.ws === f.ws) &&
       (!f.owner || a.owner === f.owner) &&
       (ignoreStatus || !f.status || a.status === f.status) &&
       (!f.prio || a.prio === f.prio) &&
       (!f.when || (f.when === 'late' ? isLate(a) : isSoon(a))) &&
-      (!q || `${a.title} ${a.owner} ${a.note} ${a.blocker} ${WSMAP[a.ws]?.l || ''}`.toLowerCase().includes(q))
+      (!q || `${a.title} ${a.owner} ${a.note} ${a.blocker} ${W.map[a.ws]?.l || ''}`.toLowerCase().includes(q))
     );
-  }, [actions, f]);
+  }, [shownActions, f, W]);
   const shown = filtered(effView === 'kanban');
   const filtersActive = Object.keys(EMPTY_F).some((k) => f[k] && !(effView === 'kanban' && k === 'status'));
 
   /* En-tête */
   const d = dayDiff(todayISO(), EVENT_DAY);
   const countN = d > 0 ? `J-${d}` : d === 0 ? 'Jour J' : `J+${-d}`;
-  const countL = d > 0 ? ['avant', 'la visite'] : d === 0 ? ['arrivée', 'à 17h00'] : ['après', 'la visite'];
+  const firstStart = W.segments[0] ? fmtTime(W.segments[0].start) : '';
+  const countL = d > 0 ? ['avant', 'la visite'] : d === 0 ? ['arrivée', firstStart ? 'à ' + firstStart : 'aujourd’hui'] : ['après', 'la visite'];
   const syncTxt = sync === 'live' ? 'En direct' : sync === 'sync' ? 'Enregistrement…' : 'Hors connexion';
   const syncC = sync === 'live' ? 'var(--done)' : sync === 'sync' ? 'var(--doing)' : 'var(--blocked)';
 
-  const drawerAction = drawer && !drawer.isNew ? actions.find((a) => a.id === drawer.id) : null;
+  const drawerAction = drawer && !drawer.isNew ? shownActions.find((a) => a.id === drawer.id) : null;
 
   return (
     <>
@@ -247,7 +267,7 @@ export default function MatrixApp({ initial, session: initialSession, dbError })
             <label className="sr" htmlFor="f-ws">Chantier</label>
             <select className="inp" id="f-ws" value={f.ws} onChange={(e) => setF({ ...f, ws: e.target.value })}>
               <option value="">Tous les chantiers</option>
-              {WS.map((w) => <option key={w.k} value={w.k}>{w.l}</option>)}
+              {W.list.map((w) => <option key={w.k} value={w.k}>{w.l}</option>)}
             </select>
             <label className="sr" htmlFor="f-owner">Porteur</label>
             <select className="inp" id="f-owner" value={f.owner} onChange={(e) => setF({ ...f, owner: e.target.value })}>
@@ -290,16 +310,16 @@ export default function MatrixApp({ initial, session: initialSession, dbError })
             {isAdmin && <button className="btn btn-accent" type="button" onClick={() => setDrawer({ isNew: true })}>+ Ajouter la première action</button>}
           </div>
         ) : effView === 'v360' ? (
-          <Vue360 actions={actions} activity={activity} onJump={jump} onOpen={(id) => setDrawer({ id })} />
+          <Vue360 actions={shownActions} activity={activity} W={W} isAdmin={isAdmin} onEditRun={() => setRunOpen(true)} onJump={jump} onOpen={(id) => setDrawer({ id })} />
         ) : effView === 'kanban' ? (
-          <Kanban items={shown} canDrag onOpen={(id) => setDrawer({ id })} onStatus={setStatus} />
+          <Kanban items={shown} W={W} canDrag onOpen={(id) => setDrawer({ id })} onStatus={setStatus} />
         ) : effView === 'assign' ? (
-          <Affectation all={actions} items={shown} onOpen={(id) => setDrawer({ id })}
+          <Affectation all={shownActions} items={shown} W={W} onOpen={(id) => setDrawer({ id })}
             onOwner={(id, v) => mutate(id, { owner: v }, v ? 'Porteur : ' + v : 'Porteur retiré')}
             onDue={(id, v) => mutate(id, { due: v }, 'Échéance mise à jour')}
             onReplace={replaceRole} />
         ) : (
-          <Checklist items={shown} all={actions} collapsed={collapsed} onToggleGroup={toggleGroup}
+          <Checklist items={shown} all={shownActions} W={W} collapsed={collapsed} onToggleGroup={toggleGroup}
             onOpen={(id) => setDrawer({ id })} onStatus={setStatus} onReset={() => setF(EMPTY_F)} />
         )}
         <footer className="foot">
@@ -311,8 +331,12 @@ export default function MatrixApp({ initial, session: initialSession, dbError })
       <datalist id="owners-dl">{owners.map((o) => <option key={o} value={o} />)}</datalist>
 
       {drawer && (drawer.isNew || drawerAction) && (
-        <Drawer key={drawer.id || 'new'} action={drawerAction} preset={drawer.preset} isNew={!!drawer.isNew} isAdmin={isAdmin}
+        <Drawer key={drawer.id || 'new'} action={drawerAction} preset={drawer.preset} isNew={!!drawer.isNew} isAdmin={isAdmin} W={W}
           defaultWs={f.ws || 'pil'} onClose={() => setDrawer(null)} onSave={saveDrawer} onDelete={deleteAction} />
+      )}
+      {runOpen && isAdmin && (
+        <DerouleEditor segments={W.segments} counts={actions.reduce((m, a) => { m[a.ws] = (m[a.ws] || 0) + 1; return m; }, {})}
+          onClose={() => setRunOpen(false)} onSave={saveRun} />
       )}
       {adminOpen && <AdminDialog onClose={() => setAdminOpen(false)} onSubmit={enableAdmin} />}
       {toastMsg && <div className="toast" role="status" aria-live="polite">{toastMsg}</div>}
@@ -321,7 +345,7 @@ export default function MatrixApp({ initial, session: initialSession, dbError })
 }
 
 /* ---------- Tiroir d'édition ---------- */
-function Drawer({ action, preset, isNew, isAdmin, defaultWs, onClose, onSave, onDelete }) {
+function Drawer({ action, preset, isNew, isAdmin, W, defaultWs, onClose, onSave, onDelete }) {
   const base = action || { title: '', ws: defaultWs, prio: 'normale', owner: '', due: '', status: 'todo', blocker: '', note: '' };
   const [form, setForm] = useState(() => ({
     title: base.title, ws: base.ws, prio: base.prio, owner: base.owner, due: base.due || '',
@@ -393,7 +417,7 @@ function Drawer({ action, preset, isNew, isAdmin, defaultWs, onClose, onSave, on
             <div className="field">
               <label htmlFor="f-ws">Chantier</label>
               <select className="inp" id="f-ws" value={form.ws} disabled={locked} onChange={(e) => set('ws', e.target.value)}>
-                {WS.map((w) => <option key={w.k} value={w.k}>{w.l}</option>)}
+                {W.list.map((w) => <option key={w.k} value={w.k}>{w.l}</option>)}
               </select>
             </div>
             <div className="field">
@@ -465,6 +489,93 @@ function AdminDialog({ onClose, onSubmit }) {
         <div className="modal-foot">
           <button type="button" className="btn btn-ghost" onClick={onClose}>Annuler</button>
           <button className="btn btn-accent" type="submit" disabled={busy}>{busy ? 'Vérification…' : 'Activer'}</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+/* ---------- Éditeur du déroulé (admin) ---------- */
+function DerouleEditor({ segments, counts, onClose, onSave }) {
+  const [rows, setRows] = useState(() => segments.map((s) => ({ id: s.id, start: s.start, duration: String(s.duration), title: s.title })));
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const set = (i, k, v) => setRows((r) => r.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
+  const valid = (x) => isTime(x.start) && Number(x.duration) >= 1 && Number(x.duration) <= 600;
+  const add = () => setRows((r) => {
+    const ends = r.filter(valid).map((x) => toMin(x.start) + Number(x.duration));
+    const start = ends.length ? fromMin(Math.max(...ends)) : '17:00';
+    return [...r, { id: null, start, duration: '10', title: '' }];
+  });
+  const remove = (i) => setRows((r) => r.filter((_, j) => j !== i));
+
+  const ok = rows.filter(valid);
+  const first = ok.length ? Math.min(...ok.map((x) => toMin(x.start))) : null;
+  const last = ok.length ? Math.max(...ok.map((x) => toMin(x.start) + Number(x.duration))) : null;
+  const sorted = [...ok].sort((a, b) => toMin(a.start) - toMin(b.start));
+  const overlaps = new Set();
+  sorted.forEach((x, i) => { if (i && toMin(x.start) < toMin(sorted[i - 1].start) + Number(sorted[i - 1].duration)) overlaps.add(x); });
+
+  async function submit(e) {
+    e.preventDefault();
+    setErr('');
+    const bad = rows.findIndex((x) => !x.title.trim() || !valid(x));
+    if (!rows.length) return setErr('Le déroulé doit compter au moins un moment.');
+    if (bad >= 0) return setErr(`Moment ${bad + 1} : vérifiez l’heure, la durée (1 à 600 min) et le titre.`);
+    setBusy(true);
+    try {
+      await onSave(rows.map((x) => ({ id: x.id, start: x.start, duration: Number(x.duration), title: x.title.trim() })));
+      onClose();
+    } catch (x) {
+      setErr(x.message || 'Enregistrement impossible.');
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="modal">
+      <div className="dr-scrim" onClick={onClose} />
+      <form className="modal-card modal-wide" onSubmit={submit} role="dialog" aria-modal="true" aria-labelledby="run-h" noValidate>
+        <h2 id="run-h">Déroulé du 30 octobre</h2>
+        <p className="hint">Modifiez l’heure, la durée et le titre de chaque moment. Le chantier rattaché prend le nouveau titre, ses actions restent en place.</p>
+        <div className="seg-list">
+          <div className="seg-row seg-headrow" aria-hidden="true"><span>Début</span><span>Durée</span><span>Titre du moment</span><span /></div>
+          {rows.map((x, i) => {
+            const n = x.id ? counts[x.id] || 0 : 0;
+            return (
+              <div className="seg-row" key={x.id || 'new' + i}>
+                <label className="sr" htmlFor={`sg-t-${i}`}>Début du moment {i + 1}</label>
+                <input className="inp" id={`sg-t-${i}`} type="time" step="60" value={x.start} onChange={(e) => set(i, 'start', e.target.value)} />
+                <label className="sr" htmlFor={`sg-d-${i}`}>Durée en minutes</label>
+                <span className="seg-dur"><input className="inp" id={`sg-d-${i}`} type="number" min="1" max="600" inputMode="numeric" value={x.duration} onChange={(e) => set(i, 'duration', e.target.value)} /><span>min</span></span>
+                <label className="sr" htmlFor={`sg-l-${i}`}>Titre du moment</label>
+                <input className="inp seg-title" id={`sg-l-${i}`} value={x.title} placeholder="Ex. : Visite du FabLab" onChange={(e) => set(i, 'title', e.target.value)} />
+                <button type="button" className="btn btn-ghost seg-del" onClick={() => remove(i)} disabled={n > 0}
+                  title={n ? `${n} action${n > 1 ? 's' : ''} rattachée${n > 1 ? 's' : ''} : déplacez-les avant de retirer ce moment` : 'Retirer ce moment'}>Retirer</button>
+                {valid(x) && (
+                  <span className="seg-note">
+                    Fin {fmtTime(endOf({ start: x.start, duration: Number(x.duration) }))}
+                    {n ? ` · ${n} action${n > 1 ? 's' : ''}` : ''}
+                    {overlaps.has(x) ? ' · chevauche le moment précédent' : ''}
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <button type="button" className="btn" onClick={add} style={{ justifySelf: 'start' }}>+ Ajouter un moment</button>
+        {err && <p className="err" role="alert">{err}</p>}
+        <div className="modal-foot">
+          <span className="seg-sum">{first != null ? `${fmtTime(fromMin(first))} → ${fmtTime(fromMin(last))} · ${last - first} min` : ''}</span>
+          <button type="button" className="btn btn-ghost" onClick={onClose}>Annuler</button>
+          <button className="btn btn-accent" type="submit" disabled={busy}>{busy ? 'Enregistrement…' : 'Enregistrer le déroulé'}</button>
         </div>
       </form>
     </div>

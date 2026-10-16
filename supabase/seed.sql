@@ -162,3 +162,13 @@ on conflict (id) do nothing;
 insert into public.activity (who, what)
 select 'MatrixODC', 'Import initial de 154 actions'
 where not exists (select 1 from public.activity where what like 'Import initial%');
+
+-- Déroulé du 30 octobre
+insert into public.segments (id, start_time, duration_min, title) values
+  ('s1', '17:00', 5,  'Accueil par le CEO et le DG'),
+  ('s2', '17:05', 10, 'Présentation Sonatel & Sonatel Academy'),
+  ('s3', '17:15', 15, 'Rencontre de 2 entrepreneurs du digital'),
+  ('s4', '17:30', 15, 'École du Code : étudiants et formateurs'),
+  ('s5', '17:45', 25, 'FabLab : démos et 2 pitchs'),
+  ('s6', '18:10', 5,  'Photo de groupe et départ')
+on conflict (id) do nothing;
